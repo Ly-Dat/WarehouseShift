@@ -1,0 +1,157 @@
+/* Custom CSS for Header component with enhanced effects */
+
+/* General reset for consistency */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+header{
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+}
+/* Hover effect for links */
+.text-decoration-none:hover,
+.nav-link:hover,
+.hover-text-light:hover {
+    color: #ffaf4d !important;
+    transform: scale(1.05);
+    transition: color 0.3s ease, transform 0.3s ease;
+}
+
+/* Search bar enhancements */
+.input-group input.form-control {
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.input-group input.form-control:focus {
+    border-color: #ffaf4d;
+    box-shadow: 0 0 12px rgba(255, 175, 77, 0.8);
+    filter: brightness(1.05);
+}
+
+/* Search button animation */
+.btn-outline-light.rounded-circle {
+    transition: all 0.3s ease;
+}
+
+.btn-outline-light.rounded-circle:hover {
+    background-color: #26b0cb !important;
+    transform: rotate(360deg);
+}
+
+/* Cart badge pulse animation */
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7);
+    }
+
+    70% {
+        transform: scale(1.2);
+        box-shadow: 0 0 0 10px rgba(220, 53, 69, 0);
+    }
+
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(220, 53, 69, 0);
+    }
+}
+
+.badge.bg-danger {
+    animation: pulse 2s infinite;
+}
+
+/* Navigation items animation */
+.nav-item .nav-link {
+    position: relative;
+    padding: 10px 15px;
+}
+
+.nav-item .nav-link::after {
+    content: '';
+    position: absolute;
+    width: 0;
+    height: 2px;
+    bottom: 0;
+    left: 50%;
+    background-color: #ffaf4d;
+    transition: all 0.3s ease;
+    transform: translateX(-50%);
+}
+
+.nav-item .nav-link:hover::after {
+    width: 100%;
+}
+
+/* Smooth transitions for container elements */
+.d-flex.align-items-center.border {
+    transition: all 0.3s ease;
+}
+
+.d-flex.align-items-center.border:hover {
+    background-color: #924d00;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Responsive styles for screens smaller than 768px */
+@media (max-width: 1000px) {
+    .container {
+        padding: 0 15px;
+    }
+
+    .w-50.mx-3 {
+        width: 100% !important;
+        margin: 10px 0 !important;
+    }
+
+    /* Hide Phone and Address sections in main header */
+    .d-flex.align-items-center.border {
+        display: none !important;
+    }
+
+    /* Hide logo in main header */
+    .fs-3.fw-bold {
+        display: none !important;
+    }
+
+    /* Center search bar and cart in main header */
+    .container.py-4.d-flex {
+        justify-content: space-between;
+        align-items: center;
+        gap: 20px;
+    }
+
+    .d-flex.align-items-center.gap-1 {
+        font-size: 0;
+    }
+
+    .d-flex.align-items-center.gap-1 svg {
+        font-size: 1.2rem;
+    }
+
+    .d-flex.align-items-center.gap-3 {
+        justify-content: flex-start;
+        /* đưa các item về bên trái */
+    }
+
+    /* Ensure Sign In and Sign Up links are visible and centered */
+    .d-flex.gap-3 {
+        width: 100%;
+        justify-content: right;
+    }
+
+    /* Hide cart text */
+    .btn-outline-light.d-flex.align-items-center.gap-1>span {
+        display: none !important;
+    }
+
+    .badge.bg-danger {
+        transform: translate(-60%, -50%) !important;
+    }
+}

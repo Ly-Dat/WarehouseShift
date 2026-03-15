@@ -1,0 +1,50 @@
+/* Custom styles for ceramics-themed login page */
+.bg-image {
+  background-size: cover;
+  background-position: center;
+  min-height: 100vh;
+}
+
+.overlay {
+  background: rgba(0, 0, 0, 0.4);
+  min-height: 100vh;
+}
+
+.login-form {
+  max-width: 400px;
+  width: 100%;
+  border: 1px solid #e5e5e5;
+}
+
+.btn-ceramic {
+  background-color: #d97706 !important; /* Amber for ceramics theme */
+  border-color: #d97706 !important;
+  transition: background-color 0.3s ease;
+}
+
+.btn-ceramic:hover {
+  background-color: #b45309 !important; /* Darker amber on hover */
+}
+
+input.form-control {
+  border-radius: 0.375rem;
+  border: 1px solid #d1d5db;
+  transition: border-color 0.3s ease;
+}
+
+input.form-control:focus {
+  border-color: #d97706;
+  box-shadow: 0 0 0 0.2rem rgba(217, 119, 6, 0.25);
+}
+
+.text-primary {
+  color: #d97706 !important; /* Amber for links */
+}
+
+.text-primary:hover {
+  color: #b45309 !important; /* Darker amber on hover */
+}
+
+.bg-light {
+  background-color: #f5f5f5 !important; /* Light beige for ceramics */
+}
