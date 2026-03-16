@@ -276,6 +276,26 @@ function parseExcelPaste(text) {
 }
 
 // ─── Components ───────────────────────────────────────────────────────────────
+function countWeekShifts(emp, weekAssignments) {
+  let count = 0;
+  for (const shift of SHIFTS) {
+    for (let d = 0; d < 7; d++) {
+      if (weekAssignments[`${emp}|${shift}|${d}`]) count++;
+    }
+  }
+  return count;
+}
+
+function countAvailableShifts(emp, allData, weekStart) {
+  let count = 0;
+  for (const shift of SHIFTS) {
+    for (let d = 0; d < 7; d++) {
+      const avail = getAvailability(allData, emp, d, weekStart);
+      if (avail.includes(shift)) count++;
+    }
+  }
+  return count;
+}
 function Avatar({ name, index }) {
   const bg    = AVATAR_COLORS[index % AVATAR_COLORS.length];
   const color = AVATAR_TEXT[index % AVATAR_TEXT.length];
@@ -990,8 +1010,37 @@ export default function HomePage() {
                     style={{ padding: '0 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#111827', minHeight: 48, borderRight: '0.5px solid #E5E7EB', cursor: si === 0 ? 'grab' : 'default', userSelect: 'none', touchAction: si === 0 ? 'none' : 'auto' }}
                   >
                     {si === 0 && <span style={{ color: '#D1D5DB', fontSize: 14, flexShrink: 0, marginRight: -4 }}>⠿</span>}
-                    <Avatar name={emp} index={ei} />
-                    {emp}
+<Avatar name={emp} index={ei} />
+<span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emp}</span>
+{(() => {
+  const assigned  = countWeekShifts(emp, weekAssignments);
+  const available = countAvailableShifts(emp, allData, weekStart);
+  if (available === 0) return null;
+  const full = assigned === available;
+  const none = assigned === 0;
+  const bg    = full ? '#D1FAE5' : none ? '#F3F4F6' : '#EDE9FE';
+  const color = full ? '#065F46' : none ? '#9CA3AF' : '#5B21B6';
+  return (
+    <span style={{
+      flexShrink: 0,
+      height: 20,
+      borderRadius: 10,
+      background: bg,
+      color: color,
+      fontSize: 11,
+      fontWeight: 600,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '0 7px',
+      lineHeight: 1,
+      transition: 'background 0.2s, color 0.2s',
+      letterSpacing: '0.01em',
+    }}>
+      {assigned}/{available}
+    </span>
+  );
+})()}
                   </div>
                   {weekDates.map((_, di) => {
                     const avail = getAvailability(allData, emp, di, weekStart);
