@@ -193,57 +193,96 @@ function autoSelectOptimal({ allData, employees, weekStart, weekKey, targets, cu
 }
 
 // ─── Parse Excel paste (for personal data modal) ──────────────────────────────
-function parseExcelPaste(text) {
-  // Normalize line endings and split
+function parseExcelPaste(text, forcedEmpCount = 0) {
   const lines = text.trim().replace(/\r\n/g, '\n').replace(/\r/g, '\n')
     .split('\n').map(l => l.split('\t').map(c => c.trim()));
   if (lines.length < 2) return null;
 
-  // Find the date row and day-label row
+  const isBlankLine = line => line.every(c => !c);
+
   let dateRow = -1, dayRow = -1;
-  for (let i = 0; i < Math.min(6, lines.length); i++) {
+  for (let i = 0; i < Math.min(10, lines.length); i++) {
     if (dateRow < 0 && /\d{2}\/\d{2}\/\d{4}/.test(lines[i].join(' '))) dateRow = i;
     if (dayRow  < 0 && lines[i].some(c => DAYS_EN.includes(c)))          dayRow  = i;
   }
 
-  // Determine column offset: index of first day label (T2/T3…) in the day row.
-  // If no day row found, default to 0 (names fill the cells, no leading name column).
   let colOffset = 0;
   if (dayRow >= 0) {
     for (let c = 0; c < lines[dayRow].length; c++) {
       if (DAYS_EN.includes(lines[dayRow][c])) { colOffset = c; break; }
     }
   } else if (dateRow >= 0) {
-    // date row: find first cell matching dd/mm/yyyy
     for (let c = 0; c < lines[dateRow].length; c++) {
       if (/\d{2}\/\d{2}\/\d{4}/.test(lines[dateRow][c])) { colOffset = c; break; }
     }
   }
 
-  const numCols = 7;
-  const dates = dateRow >= 0 ? lines[dateRow].slice(colOffset, colOffset + numCols) : [];
-  const days  = dayRow  >= 0 ? lines[dayRow].slice(colOffset, colOffset + numCols)  : DAYS_EN;
-
-  // All rows after the last header row are data rows
+  const numCols    = 7;
+  const dates      = dateRow >= 0 ? lines[dateRow].slice(colOffset, colOffset + numCols) : [];
   const headerRows = Math.max(dateRow, dayRow) + 1;
   const rawData    = lines.slice(headerRows);
 
-  const employees = new Set();
-  // availability: emp -> dayIndex -> [shifts]
+  const employees    = new Set();
   const availability = {};
 
-  // Split into shift blocks separated by fully-empty rows
+  // ── Build shift blocks ─────────────────────────────────────────────────────
   const shiftBlocks = [];
-  let block = [];
-  for (const line of rawData) {
-    if (line.every(c => !c)) {
-      if (block.length) { shiftBlocks.push(block); block = []; }
-    } else {
-      block.push(line);
+
+  if (forcedEmpCount > 0) {
+    // User explicitly told us how many employees per shift — trust it completely.
+    // Skip ALL blank lines first, then slice by count.
+    const nonBlank = rawData.filter(r => !isBlankLine(r));
+    const p = forcedEmpCount;
+    shiftBlocks.push(nonBlank.slice(0,     p));
+    shiftBlocks.push(nonBlank.slice(p,     p * 2));
+    shiftBlocks.push(nonBlank.slice(p * 2, p * 3));
+
+  } else {
+    // Group consecutive non-blank rows into chunks separated by blank lines.
+    const chunks = [];
+    let cur = [];
+    for (const line of rawData) {
+      if (isBlankLine(line)) {
+        if (cur.length) { chunks.push(cur); cur = []; }
+      } else {
+        cur.push(line);
+      }
+    }
+    if (cur.length) chunks.push(cur);
+
+    if (chunks.length === 3) {
+      // Perfect: exactly 3 blank-separated blocks → Sáng / Chiều / Tối
+      shiftBlocks.push(...chunks);
+
+    } else if (chunks.length > 3) {
+      // Too many chunks — blank lines appear within shift blocks (e.g. between rows).
+      // Merge into 3 equal-ish groups by total non-blank row count.
+      const allRows  = chunks.flat();
+      const perShift = Math.ceil(allRows.length / 3);
+      shiftBlocks.push(allRows.slice(0,         perShift));
+      shiftBlocks.push(allRows.slice(perShift,  perShift * 2));
+      shiftBlocks.push(allRows.slice(perShift * 2));
+
+    } else if (chunks.length > 0) {
+      // 1–2 chunks: no blank separators or only one gap.
+      // Use repeat-name detection on the flat rows.
+      const allRows   = chunks.flat();
+      const seenNames = new Set();
+      let perShift    = 0;
+      for (let i = 0; i < allRows.length; i++) {
+        const tokens    = allRows[i].map(c => c.trim()).filter(Boolean);
+        const hasRepeat = tokens.some(n => seenNames.has(n));
+        if (hasRepeat && i > 0) { perShift = i; break; }
+        tokens.forEach(n => seenNames.add(n));
+      }
+      if (perShift <= 0) perShift = Math.ceil(allRows.length / 3);
+      shiftBlocks.push(allRows.slice(0,         perShift));
+      shiftBlocks.push(allRows.slice(perShift,  perShift * 2));
+      shiftBlocks.push(allRows.slice(perShift * 2));
     }
   }
-  if (block.length) shiftBlocks.push(block);
 
+  // ── Parse each block ───────────────────────────────────────────────────────
   for (let si = 0; si < shiftBlocks.length && si < 3; si++) {
     const shift = SHIFTS[si];
     for (const row of shiftBlocks[si]) {
@@ -261,18 +300,16 @@ function parseExcelPaste(text) {
 
   if (!employees.size) return null;
 
-  // Convert availability to the allData format expected by the rest of the app
-  const empList = [...employees];
-  // Use first date's Monday as applyDate; fall back to today
+  const empList   = [...employees];
   const applyDate = dates[0] || formatDate(new Date());
-  const allData = empList.map(name => ({
+  const allData   = empList.map(name => ({
     name,
     applyDate,
     timestamp: new Date(),
     days: Array.from({ length: 7 }, (_, di) => availability[name]?.[di] || []),
   }));
 
-  return { allData, employees: empList, applyDate, dates, days };
+  return { allData, employees: empList, applyDate, dates, days: DAYS_EN };
 }
 
 // ─── Components ───────────────────────────────────────────────────────────────
@@ -296,6 +333,7 @@ function countAvailableShifts(emp, allData, weekStart) {
   }
   return count;
 }
+
 function Avatar({ name, index }) {
   const bg    = AVATAR_COLORS[index % AVATAR_COLORS.length];
   const color = AVATAR_TEXT[index % AVATAR_TEXT.length];
@@ -464,6 +502,7 @@ function AutoSelectModal({ onClose, onApply, allData, employees, weekStart, week
 // ─── Personal Data Modal ──────────────────────────────────────────────────────
 function PersonalDataModal({ onClose, onApply }) {
   const [pasteText, setPasteText] = useState('');
+  const [empCount, setEmpCount]   = useState('');
   const [error, setError]         = useState('');
 
   const SAMPLE = `02/02/2026\t03/02/2026\t04/02/2026\t05/02/2026\t06/02/2026\t07/02/2026\t08/02/2026
@@ -486,7 +525,7 @@ lidet\tlidet\tlidet\t\t\t\t
   function handleApply() {
     const text = pasteText.trim();
     if (!text) { setError('Vui lòng paste dữ liệu từ Excel vào ô trên.'); return; }
-    const parsed = parseExcelPaste(text);
+    const parsed = parseExcelPaste(text, parseInt(empCount) || 0);
     if (!parsed || !parsed.employees.length) {
       setError('Không nhận ra định dạng. Hãy thử tải dữ liệu mẫu để xem định dạng chuẩn.');
       return;
@@ -538,6 +577,23 @@ lidet\tlidet\tlidet\t\t\t\t
               </div>
             )}
           </div>
+
+          {/* Employee count hint */}
+          {/* <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <label style={{ fontSize: 12, fontWeight: 500, color: '#374151', whiteSpace: 'nowrap' }}>
+              Số nhân viên / ca:
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="99"
+              value={empCount}
+              onChange={e => { setEmpCount(e.target.value); setError(''); }}
+              placeholder="Tự động"
+              style={{ width: 90, padding: '5px 8px', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, color: '#111827', outline: 'none' }}
+            />
+            <span style={{ fontSize: 11, color: '#9CA3AF' }}>Nhập nếu ca tối bị thiếu dữ liệu</span>
+          </div> */}
 
           {/* Instruction */}
           <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, padding: '12px 14px', fontSize: 12, color: '#166534', lineHeight: 1.7, marginBottom: 16 }}>
@@ -700,22 +756,14 @@ export default function HomePage() {
     setSaveStatus('idle');
   }
 
-  // ─── Personal data apply ────────────────────────────────────────────────────
   function handlePersonalApply(parsed) {
-    // Merge parsed employees & data into existing allData, then set weekStart to match
     const newApplyDate = parsed.applyDate;
     const newWeekStart = getWeekStart(parseDate(newApplyDate) || new Date());
     const newWeekKey   = formatDate(newWeekStart);
 
-    // REPLACE: dùng hoàn toàn dữ liệu mới từ paste, xoá data cũ
     setAllData(parsed.allData);
-
-    // REPLACE: chỉ giữ danh sách nhân viên từ paste
     setEmployees(parsed.employees);
-
-    // Xoá assignments cũ của tuần này để tránh hiện sai
     setAllAssignments(prev => prev.filter(a => a.weekStart !== newWeekKey));
-
     setWeekStart(newWeekStart);
     setIsPersonalMode(true);
     setSaveStatus('idle');
@@ -862,12 +910,11 @@ export default function HomePage() {
             </div>
           ))}
         </div>
-        {/* Thêm dữ liệu cá nhân */}
-          <button
-            onClick={() => setShowPersonalModal(true)}
-            style={{ padding: '6px 14px', border: '1px solid #86EFAC', background: 'linear-gradient(135deg,#ECFDF5 0%,#D1FAE5 100%)', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#065F46', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 5 }}>
-            + Thêm dữ liệu cá nhân
-          </button>
+        <button
+          onClick={() => setShowPersonalModal(true)}
+          style={{ padding: '6px 14px', border: '1px solid #86EFAC', background: 'linear-gradient(135deg,#ECFDF5 0%,#D1FAE5 100%)', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#065F46', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 5 }}>
+          + Thêm dữ liệu cá nhân
+        </button>
       </div>
 
       {/* Stats */}
@@ -886,7 +933,6 @@ export default function HomePage() {
       {/* Week nav + actions */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: 8 }}>
 
-        {/* Prev / Next / date range — hidden in personal mode */}
         {!isPersonalMode && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {['‹ Prev', 'Next ›'].map((label, i) => (
@@ -902,12 +948,10 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Spacer khi ẩn nav để actions vẫn nằm phải */}
         {isPersonalMode && <div />}
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
 
-          {/* Today — hidden in personal mode */}
           {!isPersonalMode && (
             <button onClick={() => setWeekStart(getWeekStart(new Date()))}
               style={{ padding: '6px 14px', border: '1px solid #BFDBFE', background: '#EFF6FF', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#2563EB' }}>
@@ -915,7 +959,6 @@ export default function HomePage() {
             </button>
           )}
 
-          {/* ⚡ Auto-select */}
           <button
             onClick={() => setShowAutoModal(true)}
             style={{ padding: '6px 14px', border: '1px solid #A78BFA', background: 'linear-gradient(135deg,#EDE9FE 0%,#DDD6FE 100%)', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#5B21B6', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -934,7 +977,6 @@ export default function HomePage() {
             {copyStatus === 'copied' ? '✓ Copied' : 'Copy'}
           </button>
 
-          {/* Save — hidden in personal mode */}
           {!isPersonalMode && (
             <button
               onClick={handleSave}
@@ -1010,37 +1052,22 @@ export default function HomePage() {
                     style={{ padding: '0 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#111827', minHeight: 48, borderRight: '0.5px solid #E5E7EB', cursor: si === 0 ? 'grab' : 'default', userSelect: 'none', touchAction: si === 0 ? 'none' : 'auto' }}
                   >
                     {si === 0 && <span style={{ color: '#D1D5DB', fontSize: 14, flexShrink: 0, marginRight: -4 }}>⠿</span>}
-<Avatar name={emp} index={ei} />
-<span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emp}</span>
-{(() => {
-  const assigned  = countWeekShifts(emp, weekAssignments);
-  const available = countAvailableShifts(emp, allData, weekStart);
-  if (available === 0) return null;
-  const full = assigned === available;
-  const none = assigned === 0;
-  const bg    = full ? '#D1FAE5' : none ? '#F3F4F6' : '#EDE9FE';
-  const color = full ? '#065F46' : none ? '#9CA3AF' : '#5B21B6';
-  return (
-    <span style={{
-      flexShrink: 0,
-      height: 20,
-      borderRadius: 10,
-      background: bg,
-      color: color,
-      fontSize: 11,
-      fontWeight: 600,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '0 7px',
-      lineHeight: 1,
-      transition: 'background 0.2s, color 0.2s',
-      letterSpacing: '0.01em',
-    }}>
-      {assigned}/{available}
-    </span>
-  );
-})()}
+                    <Avatar name={emp} index={ei} />
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emp}</span>
+                    {(() => {
+                      const assigned  = countWeekShifts(emp, weekAssignments);
+                      const available = countAvailableShifts(emp, allData, weekStart);
+                      if (available === 0) return null;
+                      const full  = assigned === available;
+                      const none  = assigned === 0;
+                      const bg    = full ? '#D1FAE5' : none ? '#F3F4F6' : '#EDE9FE';
+                      const color = full ? '#065F46' : none ? '#9CA3AF' : '#5B21B6';
+                      return (
+                        <span style={{ flexShrink: 0, height: 20, borderRadius: 10, background: bg, color, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 7px', lineHeight: 1, transition: 'background 0.2s, color 0.2s', letterSpacing: '0.01em' }}>
+                          {assigned}/{available}
+                        </span>
+                      );
+                    })()}
                   </div>
                   {weekDates.map((_, di) => {
                     const avail = getAvailability(allData, emp, di, weekStart);
