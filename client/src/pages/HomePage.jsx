@@ -229,8 +229,6 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
   const shiftBlocks = [];
 
   if (forcedEmpCount > 0) {
-    // User explicitly told us how many employees per shift — trust it completely.
-    // Skip ALL blank lines first, then slice by count.
     const nonBlank = rawData.filter(r => !isBlankLine(r));
     const p = forcedEmpCount;
     shiftBlocks.push(nonBlank.slice(0,     p));
@@ -238,7 +236,6 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
     shiftBlocks.push(nonBlank.slice(p * 2, p * 3));
 
   } else {
-    // Group consecutive non-blank rows into chunks separated by blank lines.
     const chunks = [];
     let cur = [];
     for (const line of rawData) {
@@ -251,12 +248,9 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
     if (cur.length) chunks.push(cur);
 
     if (chunks.length === 3) {
-      // Perfect: exactly 3 blank-separated blocks → Sáng / Chiều / Tối
       shiftBlocks.push(...chunks);
 
     } else if (chunks.length > 3) {
-      // Too many chunks — blank lines appear within shift blocks (e.g. between rows).
-      // Merge into 3 equal-ish groups by total non-blank row count.
       const allRows  = chunks.flat();
       const perShift = Math.ceil(allRows.length / 3);
       shiftBlocks.push(allRows.slice(0,         perShift));
@@ -264,16 +258,14 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
       shiftBlocks.push(allRows.slice(perShift * 2));
 
     } else if (chunks.length > 0) {
-      // 1–2 chunks: no blank separators or only one gap.
-      // Use repeat-name detection on the flat rows.
       const allRows   = chunks.flat();
       const seenNames = new Set();
       let perShift    = 0;
       for (let i = 0; i < allRows.length; i++) {
         const tokens    = allRows[i].map(c => c.trim()).filter(Boolean);
-        const hasRepeat = tokens.some(n => seenNames.has(n));
+        const hasRepeat = tokens.some(n => seenNames.has(n.toLowerCase()));
         if (hasRepeat && i > 0) { perShift = i; break; }
-        tokens.forEach(n => seenNames.add(n));
+        tokens.forEach(n => seenNames.add(n.toLowerCase()));
       }
       if (perShift <= 0) perShift = Math.ceil(allRows.length / 3);
       shiftBlocks.push(allRows.slice(0,         perShift));
@@ -282,17 +274,23 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
     }
   }
 
-  // ── Parse each block ───────────────────────────────────────────────────────
+  // ── Parse each block (case-insensitive name dedup) ─────────────────────────
+  // nameMap: lowercaseKey → displayName (first occurrence wins)
+  const nameMap = {};
+
   for (let si = 0; si < shiftBlocks.length && si < 3; si++) {
     const shift = SHIFTS[si];
     for (const row of shiftBlocks[si]) {
       for (let di = 0; di < numCols; di++) {
         const cell = (row[di + colOffset] || '').trim();
         if (cell) {
-          employees.add(cell);
-          if (!availability[cell])     availability[cell]     = {};
-          if (!availability[cell][di]) availability[cell][di] = [];
-          if (!availability[cell][di].includes(shift)) availability[cell][di].push(shift);
+          const key = cell.toLowerCase();
+          if (!nameMap[key]) nameMap[key] = cell; // first-seen casing wins
+          const displayName = nameMap[key];
+          employees.add(displayName);
+          if (!availability[displayName])     availability[displayName]     = {};
+          if (!availability[displayName][di]) availability[displayName][di] = [];
+          if (!availability[displayName][di].includes(shift)) availability[displayName][di].push(shift);
         }
       }
     }
@@ -578,30 +576,14 @@ lidet\tlidet\tlidet\t\t\t\t
             )}
           </div>
 
-          {/* Employee count hint */}
-          {/* <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <label style={{ fontSize: 12, fontWeight: 500, color: '#374151', whiteSpace: 'nowrap' }}>
-              Số nhân viên / ca:
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="99"
-              value={empCount}
-              onChange={e => { setEmpCount(e.target.value); setError(''); }}
-              placeholder="Tự động"
-              style={{ width: 90, padding: '5px 8px', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, color: '#111827', outline: 'none' }}
-            />
-            <span style={{ fontSize: 11, color: '#9CA3AF' }}>Nhập nếu ca tối bị thiếu dữ liệu</span>
-          </div> */}
-
           {/* Instruction */}
           <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, padding: '12px 14px', fontSize: 12, color: '#166534', lineHeight: 1.7, marginBottom: 16 }}>
             <strong>Hướng dẫn:</strong><br/>
             1. Trong Excel, chọn vùng từ hàng ngày (<em>02/02/2026...</em>) đến hàng cuối cùng<br/>
             2. Copy (Ctrl+C) rồi paste vào ô trên (Ctrl+V)<br/>
             3. Mỗi nhóm hàng = 1 ca (Sáng → Chiều → Tối), cách nhau bằng hàng trống<br/>
-            4. Tên nhân viên xuất hiện ở cột nào = rảnh ca đó, ngày đó
+            4. Tên nhân viên xuất hiện ở cột nào = rảnh ca đó, ngày đó<br/>
+            5. <strong>Tên không phân biệt chữ hoa/thường</strong> — "Ánh" và "ánh" được gộp làm một
           </div>
 
           {/* Actions */}
@@ -1021,8 +1003,31 @@ export default function HomePage() {
 
           {SHIFTS.map((shift, si) => (
             <div key={shift}>
-              <div style={{ padding: '8px 16px', fontSize: 11, fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase', background: SHIFT_STYLES[si].bg, color: SHIFT_STYLES[si].text, borderTop: '0.5px solid #E5E7EB' }}>
-                {SHIFT_STYLES[si].label}
+              <div style={{ display: 'grid', gridTemplateColumns: col, background: SHIFT_STYLES[si].bg, borderTop: '0.5px solid #E5E7EB' }}>
+                <div style={{ padding: '8px 16px', fontSize: 11, fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase', color: SHIFT_STYLES[si].text, borderRight: '0.5px solid #E5E7EB', display: 'flex', alignItems: 'center' }}>
+                  {SHIFT_STYLES[si].label}
+                </div>
+                {[0,1,2,3,4,5,6].map(di => {
+                  const count = employees.filter(emp => weekAssignments[`${emp}|${shift}|${di}`]).length;
+                  const isToday = di === todayIdx;
+                  return (
+                    <div key={di} style={{ padding: '6px 4px', textAlign: 'center', borderRight: di < 6 ? '0.5px solid rgba(0,0,0,0.06)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <span style={{
+                        minWidth: 22, height: 22, borderRadius: 11,
+                        background: count > 0 ? SHIFT_STYLES[si].text : 'transparent',
+                        color: count > 0 ? '#fff' : SHIFT_STYLES[si].text,
+                        border: count > 0 ? 'none' : `1.5px dashed ${SHIFT_STYLES[si].text}`,
+                        fontSize: 11, fontWeight: 700,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        opacity: count > 0 ? (isToday ? 1 : 0.75) : 0.35,
+                        transition: 'all 0.15s',
+                        padding: '0 5px',
+                      }}>
+                        {count}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
               {employees.map((emp, ei) => (
                 <div key={emp} style={{ display: 'grid', gridTemplateColumns: col, borderBottom: '0.5px solid #E5E7EB' }}>
