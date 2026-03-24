@@ -192,7 +192,7 @@ function autoSelectOptimal({ allData, employees, weekStart, weekKey, targets, cu
   return result;
 }
 
-// ─── Parse Excel paste (for personal data modal) ──────────────────────────────
+// ─── Parse Excel paste ────────────────────────────────────────────────────────
 function parseExcelPaste(text, forcedEmpCount = 0) {
   const lines = text.trim().replace(/\r\n/g, '\n').replace(/\r/g, '\n')
     .split('\n').map(l => l.split('\t').map(c => c.trim()));
@@ -224,9 +224,7 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
 
   const employees    = new Set();
   const availability = {};
-
-  // ── Build shift blocks ─────────────────────────────────────────────────────
-  const shiftBlocks = [];
+  const shiftBlocks  = [];
 
   if (forcedEmpCount > 0) {
     const nonBlank = rawData.filter(r => !isBlankLine(r));
@@ -234,7 +232,6 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
     shiftBlocks.push(nonBlank.slice(0,     p));
     shiftBlocks.push(nonBlank.slice(p,     p * 2));
     shiftBlocks.push(nonBlank.slice(p * 2, p * 3));
-
   } else {
     const chunks = [];
     let cur = [];
@@ -249,14 +246,12 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
 
     if (chunks.length === 3) {
       shiftBlocks.push(...chunks);
-
     } else if (chunks.length > 3) {
       const allRows  = chunks.flat();
       const perShift = Math.ceil(allRows.length / 3);
       shiftBlocks.push(allRows.slice(0,         perShift));
       shiftBlocks.push(allRows.slice(perShift,  perShift * 2));
       shiftBlocks.push(allRows.slice(perShift * 2));
-
     } else if (chunks.length > 0) {
       const allRows   = chunks.flat();
       const seenNames = new Set();
@@ -274,10 +269,7 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
     }
   }
 
-  // ── Parse each block (case-insensitive name dedup) ─────────────────────────
-  // nameMap: lowercaseKey → displayName (first occurrence wins)
   const nameMap = {};
-
   for (let si = 0; si < shiftBlocks.length && si < 3; si++) {
     const shift = SHIFTS[si];
     for (const row of shiftBlocks[si]) {
@@ -285,7 +277,7 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
         const cell = (row[di + colOffset] || '').trim();
         if (cell) {
           const key = cell.toLowerCase();
-          if (!nameMap[key]) nameMap[key] = cell; // first-seen casing wins
+          if (!nameMap[key]) nameMap[key] = cell;
           const displayName = nameMap[key];
           employees.add(displayName);
           if (!availability[displayName])     availability[displayName]     = {};
@@ -350,14 +342,18 @@ function ShiftCell({ available, assigned, isToday, onClick, empName }) {
   else if (assigned) bg = '#D1FAE5';
   else if (hovered)  bg = '#ffffff';
   else if (isToday)  bg = 'rgba(59,130,246,0.04)';
+
+  const cellClass = !available ? 'shift-cell-unavailable' : assigned ? 'shift-cell-assigned' : 'shift-cell-available';
+
   return (
     <div
       onClick={available ? onClick : undefined}
       onMouseEnter={() => available && setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      className={cellClass}
       style={{ minHeight: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', background: bg, cursor: available ? 'pointer' : 'default', borderRight: '0.5px solid #E5E7EB', transition: 'background 0.1s' }}
     >
-      {!available && <span style={{ color: '#D1D5DB', fontSize: 20 }}>—</span>}
+      {!available && <span className="screen-only" style={{ color: '#D1D5DB', fontSize: 20 }}>—</span>}
       {available && assigned && (
         <span style={{ color: '#065F46', fontSize: 12, fontWeight: 500, textAlign: 'center', padding: '0 4px', lineHeight: 1.2 }}>
           {empName}
@@ -539,7 +535,6 @@ lidet\tlidet\tlidet\t\t\t\t
     >
       <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 20px 60px rgba(0,0,0,0.18)', width: '100%', maxWidth: 580, margin: '1rem', overflow: 'hidden', fontFamily: 'system-ui, sans-serif', maxHeight: '92vh', overflowY: 'auto' }}>
 
-        {/* Header */}
         <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #F3F4F6', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
@@ -554,10 +549,7 @@ lidet\tlidet\tlidet\t\t\t\t
           </div>
         </div>
 
-        {/* Body */}
         <div style={{ padding: '20px 24px' }}>
-
-          {/* Textarea */}
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 500, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
               Dữ liệu Excel (Ctrl+V)
@@ -576,7 +568,6 @@ lidet\tlidet\tlidet\t\t\t\t
             )}
           </div>
 
-          {/* Instruction */}
           <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, padding: '12px 14px', fontSize: 12, color: '#166534', lineHeight: 1.7, marginBottom: 16 }}>
             <strong>Hướng dẫn:</strong><br/>
             1. Trong Excel, chọn vùng từ hàng ngày (<em>02/02/2026...</em>) đến hàng cuối cùng<br/>
@@ -586,7 +577,6 @@ lidet\tlidet\tlidet\t\t\t\t
             5. <strong>Tên không phân biệt chữ hoa/thường</strong> — "Ánh" và "ánh" được gộp làm một
           </div>
 
-          {/* Actions */}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center' }}>
             <button
               onClick={() => { setPasteText(SAMPLE); setError(''); }}
@@ -809,6 +799,10 @@ export default function HomePage() {
     return lines.join('\r\n');
   }
 
+  function handlePrint() {
+    window.print();
+  }
+
   const [copyStatus, setCopyStatus] = useState('idle');
   async function handleCopy() {
     const text = buildExcelText();
@@ -874,8 +868,17 @@ export default function HomePage() {
         />
       )}
 
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
+      {/* ── PRINT-ONLY header ── */}
+      <div className="print-only-header" style={{ display: 'none' }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: '#111827', marginBottom: 2 }}>Lịch Xếp Ca</div>
+        <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 16 }}>
+          {formatDate(weekStart)} – {formatDate(weekEnd)}
+          {applyLabel ? `  ·  ${applyLabel}` : ''}
+        </div>
+      </div>
+
+      {/* Header — hidden when printing */}
+      <div className="no-print" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 500, color: '#111827', margin: 0 }}>Đăng Ký Lịch Xếp Ca</h1>
           <p style={{ fontSize: 13, color: '#6B7280', marginTop: 4 }}>{applyLabel}</p>
@@ -899,8 +902,8 @@ export default function HomePage() {
         </button>
       </div>
 
-      {/* Stats */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+      {/* Stats — hidden when printing */}
+      <div className="no-print" style={{ display: 'flex', gap: 12, marginBottom: '1.5rem', flexWrap: 'wrap' }}>
         {[
           { label: 'Số ca đăng ký',    value: totalAssigned },
           { label: 'Số người đăng ký', value: assignedEmps  },
@@ -912,8 +915,8 @@ export default function HomePage() {
         ))}
       </div>
 
-      {/* Week nav + actions */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: 8 }}>
+      {/* Week nav + actions — hidden when printing */}
+      <div className="no-print" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: 8 }}>
 
         {!isPersonalMode && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -959,6 +962,13 @@ export default function HomePage() {
             {copyStatus === 'copied' ? '✓ Copied' : 'Copy'}
           </button>
 
+          <button
+            onClick={handlePrint}
+            className="print-btn"
+            style={{ padding: '6px 14px', border: '1px solid #D1D5DB', background: '#fff', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#374151' }}>
+            Xuất PDF
+          </button>
+
           {!isPersonalMode && (
             <button
               onClick={handleSave}
@@ -973,15 +983,15 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Load error */}
+      {/* Load error — hidden when printing */}
       {loadError && (
-        <div style={{ background: '#FEF2F2', color: '#B91C1C', padding: '10px 14px', borderRadius: 8, fontSize: 13, marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="no-print" style={{ background: '#FEF2F2', color: '#B91C1C', padding: '10px 14px', borderRadius: 8, fontSize: 13, marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>⚠️ Could not load assignments: {loadError}</span>
           <button onClick={handleReload} style={{ marginLeft: 12, padding: '3px 10px', background: '#FEF2F2', border: '1px solid #EF4444', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: '#B91C1C' }}>Retry</button>
         </div>
       )}
       {loadingAssignments && (
-        <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div className="no-print" style={{ fontSize: 13, color: '#6B7280', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ width: 12, height: 12, border: '2px solid #D1D5DB', borderTopColor: '#6B7280', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
           Loading assignments...
         </div>
@@ -1011,7 +1021,7 @@ export default function HomePage() {
                   const count = employees.filter(emp => weekAssignments[`${emp}|${shift}|${di}`]).length;
                   const isToday = di === todayIdx;
                   return (
-                    <div key={di} style={{ padding: '6px 4px', textAlign: 'center', borderRight: di < 6 ? '0.5px solid rgba(0,0,0,0.06)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div key={di} className="no-print" style={{ padding: '6px 4px', textAlign: 'center', borderRight: di < 6 ? '0.5px solid rgba(0,0,0,0.06)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <span style={{
                         minWidth: 22, height: 22, borderRadius: 11,
                         background: count > 0 ? SHIFT_STYLES[si].text : 'transparent',
@@ -1056,7 +1066,7 @@ export default function HomePage() {
                     data-emp-row={si === 0 ? ei : undefined}
                     style={{ padding: '0 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#111827', minHeight: 48, borderRight: '0.5px solid #E5E7EB', cursor: si === 0 ? 'grab' : 'default', userSelect: 'none', touchAction: si === 0 ? 'none' : 'auto' }}
                   >
-                    {si === 0 && <span style={{ color: '#D1D5DB', fontSize: 14, flexShrink: 0, marginRight: -4 }}>⠿</span>}
+                    {si === 0 && <span className="no-print" style={{ color: '#D1D5DB', fontSize: 14, flexShrink: 0, marginRight: -4 }}>⠿</span>}
                     <Avatar name={emp} index={ei} />
                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emp}</span>
                     {(() => {
@@ -1068,7 +1078,7 @@ export default function HomePage() {
                       const bg    = full ? '#D1FAE5' : none ? '#F3F4F6' : '#EDE9FE';
                       const color = full ? '#065F46' : none ? '#9CA3AF' : '#5B21B6';
                       return (
-                        <span style={{ flexShrink: 0, height: 20, borderRadius: 10, background: bg, color, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 7px', lineHeight: 1, transition: 'background 0.2s, color 0.2s', letterSpacing: '0.01em' }}>
+                        <span className="no-print" style={{ flexShrink: 0, height: 20, borderRadius: 10, background: bg, color, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 7px', lineHeight: 1, transition: 'background 0.2s, color 0.2s', letterSpacing: '0.01em' }}>
                           {assigned}/{available}
                         </span>
                       );
@@ -1095,7 +1105,71 @@ export default function HomePage() {
         </div>
       </div>
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Ẩn nút xuất PDF trên mobile */
+        @media (max-width: 768px) {
+          .print-btn { display: none !important; }
+        }
+
+        @media print {
+          /* Ẩn tất cả nút và các phần không cần thiết */
+          .no-print { display: none !important; }
+
+          /* Ẩn dấu — khi in */
+          .screen-only { display: none !important; }
+
+          /* Ô assigned: bỏ nền xanh, chỉ hiện tên */
+          .shift-cell-assigned {
+            background: #fff !important;
+          }
+
+          /* Ô unavailable: bỏ nền xám */
+          .shift-cell-unavailable {
+            background: #fff !important;
+          }
+
+          /* Border cho cột tên nhân viên */
+          [data-emp-row] {
+            border-bottom: 1px solid #D1D5DB !important;
+            border-right: 1px solid #D1D5DB !important;
+          }
+          .shift-cell-assigned,
+          .shift-cell-unavailable,
+          .shift-cell-available {
+            border-bottom: 1px solid #D1D5DB !important;
+            border-right: 1px solid #D1D5DB !important;
+          }
+
+          /* Hiện print-only header */
+          .print-only-header { display: block !important; }
+
+          /* Đảm bảo màu sắc được giữ nguyên */
+          * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+
+          /* Bỏ padding ngoài cùng */
+          body { margin: 0 !important; }
+
+          /* Bỏ overflow để bảng hiển thị đủ */
+          div[style*="overflowX"] {
+            overflow: visible !important;
+          }
+
+          /* Bỏ min-width để fit trang in */
+          div[style*="minWidth: 640"] {
+            min-width: 0 !important;
+          }
+
+          /* Không ngắt trang giữa nhân viên */
+          .no-page-break {
+            page-break-inside: avoid;
+          }
+        }
+      `}</style>
     </div>
   );
 }
