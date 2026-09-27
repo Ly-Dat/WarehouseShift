@@ -20,7 +20,7 @@ const SHIFT_STYLES = [
   { bg: "#DBEAFE", text: "#1E40AF", label: "Afternoon Shift" },
   { bg: "#EDE9FE", text: "#5B21B6", label: "Evening Shift" },
 ];
-const SHIFT_TIME_LABELS = ["SÁNG (7H - 11H)", "CHIỀU (13H - 17H)", "TỐI (17H - 21H)"];
+const SHIFT_TIME_LABELS = ["SÁNG (7H30 - 11H30)", "CHIỀU (13H - 17H)", "TỐI (18H - 21H)"];
 const PRINT_SHIFT_COLORS = [
   { bg: "#FDE9C8", text: "#92400E" }, // Sáng — cam nhạt / nâu đậm
   { bg: "#BFDBFE", text: "#1E3A8A" }, // Chiều — xanh dương nhạt / xanh đậm
