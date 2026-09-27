@@ -19,6 +19,14 @@ const SHIFT_STYLES = [
   { bg: "#DBEAFE", text: "#1E40AF", label: "Afternoon Shift" },
   { bg: "#EDE9FE", text: "#5B21B6", label: "Evening Shift" },
 ];
+const SHIFT_TIME_LABELS = ["SÁNG (7H - 11H)", "CHIỀU (13H - 17H)", "TỐI (17H - 21H)"];
+const PRINT_SHIFT_COLORS = [
+  { bg: "#FDE9C8", text: "#92400E" }, // Sáng — cam nhạt / nâu đậm
+  { bg: "#BFDBFE", text: "#1E3A8A" }, // Chiều — xanh dương nhạt / xanh đậm
+  { bg: "#DDD6FE", text: "#4C1D95" }, // Tối — tím nhạt / tím đậm
+];
+const EMP_NAMES_CACHE_KEY = "shiftSchedule_empNamesText";
+const FULLTIME_CACHE_KEY = "shiftSchedule_fulltimeText";
 const AVATAR_COLORS = [
   "#DBEAFE",
   "#D1FAE5",
@@ -41,6 +49,15 @@ function getWeekStart(date) {
   const day = d.getDay();
   d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
   d.setHours(0, 0, 0, 0);
+  return d;
+}
+function getNextMonday(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay(); // 0 = Chủ nhật, 1 = Thứ 2, ...
+  if (day === 1) return d;
+  const daysUntilMonday = day === 0 ? 1 : 8 - day;
+  d.setDate(d.getDate() + daysUntilMonday);
   return d;
 }
 function formatDate(d) {
@@ -194,7 +211,9 @@ function autoSelectOptimal({
   targets,
   currentAssignments,
   allAssignmentsHistory,
+  fulltimeNames = [],
 }) {
+  const fulltimeSet = new Set(fulltimeNames);
   const historicalCount = {};
   for (const emp of employees) historicalCount[emp] = 0;
   for (const a of allAssignmentsHistory) {
@@ -203,6 +222,18 @@ function autoSelectOptimal({
     }
   }
   const result = { ...currentAssignments };
+  
+  for (const emp of employees) {
+    if (!fulltimeSet.has(emp)) continue;
+    for (const shift of SHIFTS) {
+      for (let di = 0; di < 7; di++) {
+        const avail = getAvailability(allData, emp, di, weekStart);
+        if (avail.includes(shift)) {
+          result[`${emp}|${shift}|${di}`] = true;
+        }
+      }
+    }
+  }
   function weekCount(emp) {
     let c = 0;
     for (const s of SHIFTS)
@@ -220,7 +251,7 @@ function autoSelectOptimal({
         (emp) => result[`${emp}|${shift}|${di}`],
       );
       const unassigned = available.filter(
-        (emp) => !result[`${emp}|${shift}|${di}`],
+        (emp) => !result[`${emp}|${shift}|${di}`] && !fulltimeSet.has(emp),
       );
       const currentCount = assigned.length;
       if (currentCount < target) {
@@ -234,12 +265,13 @@ function autoSelectOptimal({
           result[`${sorted[i]}|${shift}|${di}`] = true;
         }
       } else if (currentCount > target) {
-        const sorted = [...assigned].sort((a, b) => {
+        const cuttable = assigned.filter((emp) => !fulltimeSet.has(emp));
+        const sorted = [...cuttable].sort((a, b) => {
           const wDiff = weekCount(b) - weekCount(a);
           if (wDiff !== 0) return wDiff;
           return (historicalCount[b] || 0) - (historicalCount[a] || 0);
         });
-        const toCut = currentCount - target;
+        const toCut = Math.min(currentCount - target, cuttable.length);
         for (let i = 0; i < toCut; i++) {
           result[`${sorted[i]}|${shift}|${di}`] = false;
         }
@@ -250,130 +282,66 @@ function autoSelectOptimal({
 }
 
 // ─── Parse Excel paste ────────────────────────────────────────────────────────
-function parseExcelPaste(text, forcedEmpCount = 0) {
-  const lines = text
-    .trim()
+// employeeList: the ordered list of employee names, entered by the user BEFORE
+// pasting (matches the top-to-bottom row order used inside each shift block in
+// the spreadsheet). Because the row's position tells us which employee it is,
+// we never need to read/match the cell's text as a name — a cell is simply
+// "available" if it's non-empty, whatever it contains (e.g. "oanh(4H)" no
+// longer creates a second, separate employee from "oanh").
+//
+// gridTexts: { "Sáng": text, "Chiều": text, "Tối": text } — each text is ONLY
+// that shift's grid (p rows × 7 day-columns, tab-separated), pasted on its
+// own, with no date/day header row and no other shift mixed in. Pasting each
+// shift separately removes the need to guess where one shift's block ends
+// and the next begins (which is what caused the earlier misalignment bugs
+// with note/separator rows between blocks).
+function parseShiftGrid(text, p) {
+  // IMPORTANT: do NOT .trim() the whole text — a row that is entirely blank
+  // (e.g. an employee with zero availability that shift, like "Linh") is
+  // still a real row at a real position. Trimming would delete that leading
+  // blank line and shift every row below it up by one, misassigning
+  // everyone's data to the wrong employee.
+  const rows = (text || "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .split("\n")
     .map((l) => l.split("\t").map((c) => c.trim()));
-  if (lines.length < 2) return null;
+  const out = [];
+  for (let i = 0; i < p; i++) out.push(rows[i] || []);
+  return out;
+}
 
-  const isBlankLine = (line) => line.every((c) => !c);
+function parseExcelPaste(employeeList, weekStartStr, gridTexts) {
+  const empList = (employeeList || []).map((n) => n.trim()).filter(Boolean);
+  if (!empList.length) return null;
 
-  let dateRow = -1,
-    dayRow = -1;
-  for (let i = 0; i < Math.min(10, lines.length); i++) {
-    if (dateRow < 0 && /\d{2}\/\d{2}\/\d{4}/.test(lines[i].join(" ")))
-      dateRow = i;
-    if (dayRow < 0 && lines[i].some((c) => DAYS_EN.includes(c))) dayRow = i;
-  }
-
-  let colOffset = 0;
-  if (dayRow >= 0) {
-    for (let c = 0; c < lines[dayRow].length; c++) {
-      if (DAYS_EN.includes(lines[dayRow][c])) {
-        colOffset = c;
-        break;
-      }
-    }
-  } else if (dateRow >= 0) {
-    for (let c = 0; c < lines[dateRow].length; c++) {
-      if (/\d{2}\/\d{2}\/\d{4}/.test(lines[dateRow][c])) {
-        colOffset = c;
-        break;
-      }
-    }
-  }
-
+  const p = empList.length;
   const numCols = 7;
-  const dates =
-    dateRow >= 0 ? lines[dateRow].slice(colOffset, colOffset + numCols) : [];
-  const headerRows = Math.max(dateRow, dayRow) + 1;
-  const rawData = lines.slice(headerRows);
-
-  const employees = new Set();
   const availability = {};
-  const shiftBlocks = [];
 
-  if (forcedEmpCount > 0) {
-    const nonBlank = rawData.filter((r) => !isBlankLine(r));
-    const p = forcedEmpCount;
-    shiftBlocks.push(nonBlank.slice(0, p));
-    shiftBlocks.push(nonBlank.slice(p, p * 2));
-    shiftBlocks.push(nonBlank.slice(p * 2, p * 3));
-  } else {
-    const chunks = [];
-    let cur = [];
-    for (const line of rawData) {
-      if (isBlankLine(line)) {
-        if (cur.length) {
-          chunks.push(cur);
-          cur = [];
-        }
-      } else {
-        cur.push(line);
-      }
-    }
-    if (cur.length) chunks.push(cur);
-
-    if (chunks.length === 3) {
-      shiftBlocks.push(...chunks);
-    } else if (chunks.length > 0) {
-      const allRows = chunks.flat();
-      let perShift = 0;
-
-      // Phương pháp 1: detect tên lặp theo hàng (tên xuất hiện ở cột khác nhau)
-      const seenNames = new Set();
-      for (let i = 0; i < allRows.length; i++) {
-        const tokens = allRows[i].map((c) => c.trim()).filter(Boolean);
-        const hasRepeat = tokens.some((n) => seenNames.has(n.toLowerCase()));
-        if (hasRepeat && i > 0) {
-          perShift = i;
-          break;
-        }
-        tokens.forEach((n) => seenNames.add(n.toLowerCase()));
-      }
-
-      // Phương pháp 2: nếu chunks chia đều được 3 phần bằng nhau → dùng luôn
-      if (perShift <= 0 && chunks.length % 3 === 0) {
-        perShift = allRows.length / 3;
-      }
-
-      // Phương pháp 3: fallback chia đều
-      if (perShift <= 0) perShift = Math.ceil(allRows.length / 3);
-
-      shiftBlocks.push(allRows.slice(0, perShift));
-      shiftBlocks.push(allRows.slice(perShift, perShift * 2));
-      shiftBlocks.push(allRows.slice(perShift * 2));
-    }
-  }
-
-  const nameMap = {};
-  for (let si = 0; si < shiftBlocks.length && si < 3; si++) {
+  for (let si = 0; si < 3; si++) {
     const shift = SHIFTS[si];
-    for (const row of shiftBlocks[si]) {
+    const rows = parseShiftGrid(gridTexts[shift], p);
+    for (let ei = 0; ei < p; ei++) {
+      const name = empList[ei];
+      const row = rows[ei];
       for (let di = 0; di < numCols; di++) {
-        const cell = (row[di + colOffset] || "").trim();
+        const cell = (row[di] || "").trim();
         if (cell) {
-          const key = cell.toLowerCase();
-          if (!nameMap[key]) nameMap[key] = cell;
-          const displayName = nameMap[key];
-          employees.add(displayName);
-          if (!availability[displayName]) availability[displayName] = {};
-          if (!availability[displayName][di])
-            availability[displayName][di] = [];
-          if (!availability[displayName][di].includes(shift))
-            availability[displayName][di].push(shift);
+          if (!availability[name]) availability[name] = {};
+          if (!availability[name][di]) availability[name][di] = [];
+          if (!availability[name][di].includes(shift))
+            availability[name][di].push(shift);
         }
       }
     }
   }
 
-  if (!employees.size) return null;
+  const parsedWeekStart = parseDate((weekStartStr || "").trim());
+  const applyDate = parsedWeekStart
+    ? formatDate(parsedWeekStart)
+    : formatDate(getWeekStart(new Date()));
 
-  const empList = [...employees];
-  const applyDate = dates[0] || formatDate(new Date());
   const allData = empList.map((name) => ({
     name,
     applyDate,
@@ -381,7 +349,7 @@ function parseExcelPaste(text, forcedEmpCount = 0) {
     days: Array.from({ length: 7 }, (_, di) => availability[name]?.[di] || []),
   }));
 
-  return { allData, employees: empList, applyDate, dates, days: DAYS_EN };
+  return { allData, employees: empList, applyDate, days: DAYS_EN };
 }
 
 // ─── Components ───────────────────────────────────────────────────────────────
@@ -510,6 +478,26 @@ function AutoSelectModal({
   );
   const [preview, setPreview] = useState(null);
   const [hasPreview, setHasPreview] = useState(false);
+  const [fulltimeText, setFulltimeText] = useState(() => {
+    try {
+      return localStorage.getItem(FULLTIME_CACHE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
+  const fulltimeNames = fulltimeText
+    .split("\n")
+    .map((n) => n.trim())
+    .filter(Boolean);
+
+  function handleFulltimeChange(val) {
+    setFulltimeText(val);
+    setHasPreview(false);
+    setPreview(null);
+    try {
+      localStorage.setItem(FULLTIME_CACHE_KEY, val);
+    } catch {}
+  }
 
   function setAll(val) {
     const v = Math.max(0, Number(val) || 0);
@@ -527,6 +515,7 @@ function AutoSelectModal({
       targets,
       currentAssignments,
       allAssignmentsHistory: allAssignments,
+      fulltimeNames,
     });
     setPreview(result);
     setHasPreview(true);
@@ -675,6 +664,50 @@ function AutoSelectModal({
           </span>
           <div style={{ marginLeft: "auto", fontSize: 12, color: "#6B7280" }}>
             {employees.length} nhân viên trong hệ thống
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: "14px 24px",
+            borderBottom: "1px solid #F3F4F6",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 500,
+              color: "#6B7280",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              marginBottom: 8,
+            }}
+          >
+            Nhân viên fulltime (giữ nguyên ca, mỗi tên một dòng)
+          </div>
+          <textarea
+            rows={3}
+            value={fulltimeText}
+            onChange={(e) => handleFulltimeChange(e.target.value)}
+            placeholder="Nhập tên nhân viên fulltime — ca hiện tại của họ sẽ không bị thêm/cắt khi Auto-Select"
+            style={{
+              width: "100%",
+              padding: "8px 10px",
+              border: "1px solid #E5E7EB",
+              borderRadius: 8,
+              fontSize: 12,
+              fontFamily: "monospace",
+              resize: "vertical",
+              outline: "none",
+              color: "#111827",
+              background: "#FAFAFA",
+              lineHeight: 1.6,
+            }}
+          />
+          <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 5 }}>
+            {fulltimeNames.length > 0
+              ? `${fulltimeNames.length} nhân viên fulltime đã ghim ca`
+              : "Chưa có nhân viên fulltime nào"}
           </div>
         </div>
 
@@ -900,6 +933,7 @@ function AutoSelectModal({
                   targets,
                   currentAssignments,
                   allAssignmentsHistory: allAssignments,
+                  fulltimeNames,
                 });
                 onApply(result);
               } else {
@@ -925,44 +959,241 @@ function AutoSelectModal({
     </div>
   );
 }
-
+function PrintChoiceModal({ onClose, onSelect }) {
+  const options = [
+    { key: "all", label: "Tất cả các ca" },
+    { key: "Sáng", label: "Ca Sáng" },
+    { key: "Chiều", label: "Ca Chiều" },
+    { key: "Tối", label: "Ca Tối" },
+  ];
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0,0,0,0.35)",
+        backdropFilter: "blur(2px)",
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 16,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
+          width: "100%",
+          maxWidth: 340,
+          margin: "1rem",
+          overflow: "hidden",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        <div style={{ padding: "18px 22px", borderBottom: "1px solid #F3F4F6" }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "#111827" }}>
+            Xuất PDF
+          </div>
+          <div style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>
+            Chọn ca muốn xuất
+          </div>
+        </div>
+        <div style={{ padding: "14px 22px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {options.map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => onSelect(opt.key)}
+              style={{
+                padding: "10px 14px",
+                border: "1px solid #D1D5DB",
+                background: "#fff",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontSize: 13,
+                color: "#374151",
+                textAlign: "left",
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ padding: "0 22px 18px", display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={onClose}
+            style={{
+              padding: "7px 16px",
+              border: "1px solid #D1D5DB",
+              background: "#fff",
+              borderRadius: 8,
+              cursor: "pointer",
+              fontSize: 13,
+              color: "#374151",
+            }}
+          >
+            Huỷ
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function PrintShiftTable({ shiftIndex, employees, weekDates, weekStart, allData, weekAssignments }) {
+  const shift = SHIFTS[shiftIndex];
+  const printColor = PRINT_SHIFT_COLORS[shiftIndex];
+  return (
+    <table className="print-shift-table">
+      <colgroup>
+        <col className="print-col-label" />
+        <col className="print-col-emp" />
+        {weekDates.map((_, i) => (
+          <col key={i} />
+        ))}
+      </colgroup>
+      <thead>
+        <tr>
+          <th
+            rowSpan={2}
+            className="print-shift-label"
+            style={{ background: printColor.bg, color: printColor.text }}
+          >
+            {SHIFT_TIME_LABELS[shiftIndex]}
+          </th>
+          <th rowSpan={2} className="print-header-cell">
+            Nhân viên
+          </th>
+          {weekDates.map((d, i) => (
+            <th
+              key={`d-${i}`}
+              className={`print-header-cell${i === 6 ? " print-sunday" : ""}`}
+            >
+              {formatDate(d)}
+            </th>
+          ))}
+        </tr>
+        <tr>
+          {weekDates.map((_, i) => (
+            <th
+              key={`w-${i}`}
+              className={`print-header-cell${i === 6 ? " print-sunday" : ""}`}
+            >
+              {DAYS_EN[i]}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {employees.map((emp, ei) => (
+          <tr key={emp}>
+            {ei === 0 && (
+              <td
+                rowSpan={employees.length}
+                className="print-shift-label"
+                style={{ background: printColor.bg }}
+              />
+            )}
+            <td className="print-emp-cell">{emp}</td>
+            {weekDates.map((_, di) => {
+              const avail = getAvailability(allData, emp, di, weekStart);
+              const assigned =
+                avail.includes(shift) && weekAssignments[`${emp}|${shift}|${di}`];
+              const isSun = di === 6;
+              return (
+                <td
+                  key={di}
+                  className={`print-data-cell${
+                    isSun ? " print-sunday" : assigned ? " print-assigned" : ""
+                  }`}
+                >
+                  {assigned ? emp : ""}
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 // ─── Personal Data Modal ──────────────────────────────────────────────────────
-function PersonalDataModal({ onClose, onApply }) {
-  const [pasteText, setPasteText] = useState("");
-  const [empCount, setEmpCount] = useState("");
+function PersonalDataModal({ onClose, onApply, initialData }) {
+  const [step, setStep] = useState("names"); // "names" | "paste"
+  const [namesText, setNamesText] = useState(() => {
+    if (initialData?.namesText) return initialData.namesText;
+    try {
+      return localStorage.getItem(EMP_NAMES_CACHE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
+  const [weekStartText, setWeekStartText] = useState(
+    () => initialData?.weekStartText ?? formatDate(getNextMonday(new Date())),
+  );
+  const [gridTexts, setGridTexts] = useState(
+    () =>
+      initialData?.gridTexts ?? {
+        Sáng: "",
+        Chiều: "",
+        Tối: "",
+      },
+  );
   const [error, setError] = useState("");
+  const isEditing = !!initialData;
 
-  const SAMPLE = `02/02/2026\t03/02/2026\t04/02/2026\t05/02/2026\t06/02/2026\t07/02/2026\t08/02/2026
-T2\tT3\tT4\tT5\tT6\tT7\tCN
-Đạt\tĐạt\t\t\tĐạt\t\tĐạt
-Ánh\t\tÁnh\t\t\t\t
-lidet\t\tlidet\t\t\tlidet\tlidet
-\tÁnh li\t\tÁnh li\tÁnh li\tÁnh li\t
+  const SAMPLE_NAMES = `Linh\nÁnh\nTrầm\nÁnh Lê\nNgân\nAn\nyến\noanh\nTiên\nNhư\nKhánh vy\nNguyên`;
 
-\t\tĐạt\t\t\t\tĐạt
-\t\t\tÁnh\tÁnh\tÁnh\t
-lidet\tlidet\tlidet\t\t\t\t
-\tÁnh li\t\tÁnh li\tÁnh li\tÁnh li\tÁnh li
+  const employeeList = namesText
+    .split("\n")
+    .map((n) => n.trim())
+    .filter(Boolean);
 
-\t\t\t\tĐạt\t\tĐạt
-\t\t\t\t\t\tÁnh
-\t\t\t\tlidet\tlidet\tlidet
-`;
+  function sampleGridFor(si) {
+    // Small illustrative pattern matching the current employee count, so the
+    // shape (p rows × 7 tab-separated columns) is obvious at a glance.
+    const p = employeeList.length || 3;
+    const lines = [];
+    for (let ei = 0; ei < p; ei++) {
+      const cells = Array.from({ length: 7 }, (_, di) =>
+        (ei + di + si) % 3 === 0 ? "x" : "",
+      );
+      lines.push(cells.join("\t"));
+    }
+    return lines.join("\n");
+  }
+
+  function handleNext() {
+    if (!employeeList.length) {
+      setError("Vui lòng nhập danh sách tên nhân viên, mỗi tên một dòng.");
+      return;
+    }
+    setError("");
+    setStep("paste");
+  }
 
   function handleApply() {
-    const text = pasteText.trim();
-    if (!text) {
-      setError("Vui lòng paste dữ liệu từ Excel vào ô trên.");
+    if (!weekStartText.trim()) {
+      setError("Vui lòng nhập ngày bắt đầu tuần (Thứ 2), định dạng dd/mm/yyyy.");
       return;
     }
-    const parsed = parseExcelPaste(text, parseInt(empCount) || 0);
+    if (!parseDate(weekStartText.trim())) {
+      setError("Ngày bắt đầu tuần không hợp lệ — dùng định dạng dd/mm/yyyy.");
+      return;
+    }
+    const anyData = SHIFTS.some((s) => gridTexts[s].trim());
+    if (!anyData) {
+      setError("Vui lòng paste dữ liệu cho ít nhất một ca.");
+      return;
+    }
+    const parsed = parseExcelPaste(employeeList, weekStartText, gridTexts);
     if (!parsed || !parsed.employees.length) {
-      setError(
-        "Không nhận ra định dạng. Hãy thử tải dữ liệu mẫu để xem định dạng chuẩn.",
-      );
+      setError("Có lỗi khi đọc dữ liệu. Vui lòng kiểm tra lại các ô đã paste.");
       return;
     }
-    onApply(parsed);
+    onApply(parsed, { namesText, weekStartText, gridTexts });
     onClose();
   }
 
@@ -1032,12 +1263,16 @@ lidet\tlidet\tlidet\t\t\t\t
                     fontSize: 14,
                   }}
                 >
-                  + Thêm dữ liệu cá nhân
+                  {isEditing ? "✎ Sửa dữ liệu cá nhân" : "+ Thêm dữ liệu cá nhân"}
+                </span>
+                <span style={{ fontSize: 12, color: "#9CA3AF" }}>
+                  {step === "names" ? "Bước 1/2" : "Bước 2/2"}
                 </span>
               </div>
               <div style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>
-                Paste dữ liệu phân ca từ Excel — từ T2 tới CN (bao gồm hàng ngày
-                tháng)
+                {step === "names"
+                  ? "Nhập danh sách tên nhân viên, theo đúng thứ tự hàng trong sheet"
+                  : "Paste riêng từng ca — không cần đoán ranh giới giữa các ca nữa"}
               </div>
             </div>
             <button
@@ -1062,46 +1297,225 @@ lidet\tlidet\tlidet\t\t\t\t
           </div>
         </div>
 
-        <div style={{ padding: "20px 24px" }}>
-          <div style={{ marginBottom: 14 }}>
+        {step === "names" && (
+          <div style={{ padding: "20px 24px" }}>
+            <div style={{ marginBottom: 14 }}>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: "#6B7280",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  marginBottom: 8,
+                }}
+              >
+                Danh sách nhân viên (mỗi tên một dòng)
+              </div>
+              <textarea
+                rows={12}
+                value={namesText}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setNamesText(val);
+                  setError("");
+                  try {
+                    localStorage.setItem(EMP_NAMES_CACHE_KEY, val);
+                  } catch {}
+                }}
+                placeholder={`Nhập tên từng nhân viên, mỗi tên một dòng, theo đúng thứ tự hàng trong sheet.\n\nVí dụ:\nLinh\nÁnh\nTrầm\n...`}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontFamily: "monospace",
+                  resize: "vertical",
+                  outline: "none",
+                  color: "#111827",
+                  background: "#FAFAFA",
+                  lineHeight: 1.6,
+                }}
+              />
+              {error && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: "8px 12px",
+                    background: "#FEF2F2",
+                    color: "#B91C1C",
+                    borderRadius: 6,
+                    fontSize: 12,
+                  }}
+                >
+                  ⚠ {error}
+                </div>
+              )}
+            </div>
+
             <div
               style={{
+                background: "#F0FDF4",
+                border: "1px solid #BBF7D0",
+                borderRadius: 8,
+                padding: "12px 14px",
                 fontSize: 12,
-                fontWeight: 500,
-                color: "#6B7280",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-                marginBottom: 8,
+                color: "#166534",
+                lineHeight: 1.7,
+                marginBottom: 16,
               }}
             >
-              Dữ liệu Excel (Ctrl+V)
+              <strong>Vì sao cần bước này:</strong> mỗi ca (Sáng/Chiều/Tối)
+              trong sheet có đúng {employeeList.length || "N"} hàng, theo thứ
+              tự nhân viên cố định. Nhập tên trước để app biết hàng nào ứng
+              với nhân viên nào — tránh bị nhận nhầm (vd. "oanh" và
+              "oanh(4H)" bị tách thành 2 người).
             </div>
-            <textarea
-              rows={10}
-              value={pasteText}
-              onChange={(e) => {
-                setPasteText(e.target.value);
-                setError("");
-              }}
-              placeholder={`Paste dữ liệu từ Excel vào đây...\n\nĐịnh dạng mẫu:\n02/02/2026  03/02/2026  ...\nT2          T3          ...\nĐạt                     ...\nÁnh         Ánh         ...\n\n(Sáng / Chiều / Tối theo nhóm hàng, cách nhau bằng hàng trống)`}
+
+            <div
               style={{
-                width: "100%",
-                padding: "10px 12px",
-                border: "1px solid #E5E7EB",
-                borderRadius: 8,
-                fontSize: 12,
-                fontFamily: "monospace",
-                resize: "vertical",
-                outline: "none",
-                color: "#111827",
-                background: "#FAFAFA",
-                lineHeight: 1.5,
+                display: "flex",
+                gap: 8,
+                justifyContent: "space-between",
+                alignItems: "center",
               }}
-            />
+            >
+              <button
+                onClick={() => {
+                  setNamesText(SAMPLE_NAMES);
+                  setError("");
+                  try {
+                    localStorage.setItem(EMP_NAMES_CACHE_KEY, SAMPLE_NAMES);
+                  } catch {}
+                }}
+                style={{
+                  padding: "7px 14px",
+                  border: "1px solid #E5E7EB",
+                  background: "#F9FAFB",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  fontSize: 12,
+                  color: "#6B7280",
+                }}
+              >
+                Tải danh sách mẫu
+              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={onClose}
+                  style={{
+                    padding: "8px 18px",
+                    border: "1px solid #D1D5DB",
+                    background: "#fff",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 13,
+                    color: "#374151",
+                  }}
+                >
+                  Huỷ
+                </button>
+                <button
+                  onClick={handleNext}
+                  style={{
+                    padding: "8px 20px",
+                    border: "1px solid #059669",
+                    background: "#D1FAE5",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 13,
+                    color: "#065F46",
+                    fontWeight: 600,
+                  }}
+                >
+                  Tiếp theo →
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === "paste" && (
+          <div style={{ padding: "20px 24px" }}>
+            <div style={{ marginBottom: 16 }}>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: "#6B7280",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  marginBottom: 8,
+                }}
+              >
+                Ngày bắt đầu tuần (Thứ 2)
+              </div>
+              <input
+                type="text"
+                value={weekStartText}
+                onChange={(e) => {
+                  setWeekStartText(e.target.value);
+                  setError("");
+                }}
+                placeholder="dd/mm/yyyy"
+                style={{
+                  padding: "8px 12px",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  outline: "none",
+                  color: "#111827",
+                  background: "#FAFAFA",
+                  width: 160,
+                }}
+              />
+            </div>
+
+            {SHIFTS.map((shift, si) => (
+              <div key={shift} style={{ marginBottom: 14 }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: "#6B7280",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.05em",
+                    marginBottom: 8,
+                  }}
+                >
+                  Ca {shift} — {employeeList.length} hàng × 7 cột (T2→CN)
+                </div>
+                <textarea
+                  rows={Math.min(Math.max(employeeList.length, 3), 6)}
+                  value={gridTexts[shift]}
+                  onChange={(e) => {
+                    setGridTexts((prev) => ({ ...prev, [shift]: e.target.value }));
+                    setError("");
+                  }}
+                  placeholder={`Chỉ paste đúng ${employeeList.length} hàng của ca ${shift} — không kèm hàng ngày, không kèm ca khác.\nMỗi hàng ứng với 1 nhân viên theo đúng thứ tự đã nhập ở bước 1.`}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    border: "1px solid #E5E7EB",
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontFamily: "monospace",
+                    resize: "vertical",
+                    outline: "none",
+                    color: "#111827",
+                    background: "#FAFAFA",
+                    lineHeight: 1.5,
+                  }}
+                />
+              </div>
+            ))}
+
             {error && (
               <div
                 style={{
-                  marginTop: 8,
+                  marginTop: 4,
+                  marginBottom: 12,
                   padding: "8px 12px",
                   background: "#FEF2F2",
                   color: "#B91C1C",
@@ -1112,94 +1526,102 @@ lidet\tlidet\tlidet\t\t\t\t
                 ⚠ {error}
               </div>
             )}
-          </div>
 
-          <div
-            style={{
-              background: "#F0FDF4",
-              border: "1px solid #BBF7D0",
-              borderRadius: 8,
-              padding: "12px 14px",
-              fontSize: 12,
-              color: "#166534",
-              lineHeight: 1.7,
-              marginBottom: 16,
-            }}
-          >
-            <strong>Hướng dẫn:</strong>
-            <br />
-            1. Trong Excel, chọn vùng từ hàng ngày (<em>02/02/2026...</em>) đến
-            hàng cuối cùng
-            <br />
-            2. Copy (Ctrl+C) rồi paste vào ô trên (Ctrl+V)
-            <br />
-            3. Mỗi nhóm hàng = 1 ca (Sáng → Chiều → Tối), cách nhau bằng hàng
-            trống
-            <br />
-            4. Tên nhân viên xuất hiện ở cột nào = rảnh ca đó, ngày đó
-            <br />
-            5. <strong>Tên không phân biệt chữ hoa/thường</strong> — "Ánh" và
-            "ánh" được gộp làm một
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              gap: 8,
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <button
-              onClick={() => {
-                setPasteText(SAMPLE);
-                setError("");
-              }}
+            <div
               style={{
-                padding: "7px 14px",
-                border: "1px solid #E5E7EB",
-                background: "#F9FAFB",
+                background: "#F0FDF4",
+                border: "1px solid #BBF7D0",
                 borderRadius: 8,
-                cursor: "pointer",
+                padding: "12px 14px",
                 fontSize: 12,
-                color: "#6B7280",
+                color: "#166534",
+                lineHeight: 1.7,
+                marginBottom: 16,
               }}
             >
-              Tải dữ liệu mẫu
-            </button>
-            <div style={{ display: "flex", gap: 8 }}>
+              <strong>Hướng dẫn:</strong>
+              <br />
+              1. Trong Excel/Sheet, mỗi ca chọn riêng đúng vùng dữ liệu của ca
+              đó ({employeeList.length} hàng × 7 cột T2→CN) — không chọn hàng
+              ngày/tháng, không chọn ca khác, không chọn cột tên nhân viên
+              <br />
+              2. Copy (Ctrl+C) rồi paste vào đúng ô của ca đó (Ctrl+V)
+              <br />
+              3. Hàng thứ N trong ô paste luôn ứng với nhân viên thứ N trong
+              danh sách đã nhập ở bước 1 — kể cả khi hàng đó trống (nhân
+              viên không rảnh ca này)
+              <br />
+              4. Ô nào không trống = nhân viên tương ứng rảnh ngày đó, ca đó.
+              Nội dung trong ô không quan trọng (vd. "oanh" hay "oanh(4H)"
+              đều tính là rảnh)
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
               <button
-                onClick={onClose}
+                onClick={() => {
+                  setGridTexts({
+                    Sáng: sampleGridFor(0),
+                    Chiều: sampleGridFor(1),
+                    Tối: sampleGridFor(2),
+                  });
+                  setError("");
+                }}
                 style={{
-                  padding: "8px 18px",
-                  border: "1px solid #D1D5DB",
-                  background: "#fff",
+                  padding: "7px 14px",
+                  border: "1px solid #E5E7EB",
+                  background: "#F9FAFB",
                   borderRadius: 8,
                   cursor: "pointer",
-                  fontSize: 13,
-                  color: "#374151",
+                  fontSize: 12,
+                  color: "#6B7280",
                 }}
               >
-                Huỷ
+                Tải dữ liệu mẫu
               </button>
-              <button
-                onClick={handleApply}
-                style={{
-                  padding: "8px 20px",
-                  border: "1px solid #059669",
-                  background: "#D1FAE5",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontSize: 13,
-                  color: "#065F46",
-                  fontWeight: 600,
-                }}
-              >
-                ✓ Áp dụng
-              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => {
+                    setStep("names");
+                    setError("");
+                  }}
+                  style={{
+                    padding: "8px 18px",
+                    border: "1px solid #D1D5DB",
+                    background: "#fff",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 13,
+                    color: "#374151",
+                  }}
+                >
+                  ← Quay lại
+                </button>
+                <button
+                  onClick={handleApply}
+                  style={{
+                    padding: "8px 20px",
+                    border: "1px solid #059669",
+                    background: "#D1FAE5",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 13,
+                    color: "#065F46",
+                    fontWeight: 600,
+                  }}
+                >
+                  ✓ Áp dụng
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -1224,6 +1646,24 @@ export default function HomePage() {
   const [showAutoModal, setShowAutoModal] = useState(false);
   const [showPersonalModal, setShowPersonalModal] = useState(false);
   const [isPersonalMode, setIsPersonalMode] = useState(false);
+  const [personalRawData, setPersonalRawData] = useState(null);
+  const [showPrintChoice, setShowPrintChoice] = useState(false);
+  const [printFilter, setPrintFilter] = useState(null); // null | "all" | "Sáng" | "Chiều" | "Tối"
+
+  useEffect(() => {
+    if (!printFilter) return;
+    const printTimer = setTimeout(() => window.print(), 60);
+    const fallbackReset = setTimeout(() => setPrintFilter(null), 60000);
+    function reset() {
+      setPrintFilter(null);
+    }
+    window.addEventListener("afterprint", reset);
+    return () => {
+      clearTimeout(printTimer);
+      clearTimeout(fallbackReset);
+      window.removeEventListener("afterprint", reset);
+    };
+  }, [printFilter]);
 
   useEffect(() => {
     async function fetchSheet() {
@@ -1369,7 +1809,7 @@ export default function HomePage() {
     setSaveStatus("idle");
   }
 
-  function handlePersonalApply(parsed) {
+  function handlePersonalApply(parsed, raw) {
     const newApplyDate = parsed.applyDate;
     const newWeekStart = getWeekStart(parseDate(newApplyDate) || new Date());
     const newWeekKey = formatDate(newWeekStart);
@@ -1379,6 +1819,7 @@ export default function HomePage() {
     setAllAssignments((prev) => prev.filter((a) => a.weekStart !== newWeekKey));
     setWeekStart(newWeekStart);
     setIsPersonalMode(true);
+    setPersonalRawData(raw || null);
     setSaveStatus("idle");
   }
 
@@ -1461,7 +1902,12 @@ export default function HomePage() {
   }
 
   function handlePrint() {
-    window.print();
+    setShowPrintChoice(true);
+  }
+
+  function handlePrintSelect(choice) {
+    setShowPrintChoice(false);
+    setPrintFilter(choice);
   }
 
   const [copyStatus, setCopyStatus] = useState("idle");
@@ -1588,7 +2034,32 @@ export default function HomePage() {
         <PersonalDataModal
           onClose={() => setShowPersonalModal(false)}
           onApply={handlePersonalApply}
+          initialData={personalRawData}
         />
+      )}
+      {showPrintChoice && (
+        <PrintChoiceModal
+          onClose={() => setShowPrintChoice(false)}
+          onSelect={handlePrintSelect}
+        />
+      )}
+
+      {printFilter && (
+        <div className="print-only-tables">
+          {(printFilter === "all" ? [0, 1, 2] : [SHIFTS.indexOf(printFilter)]).map(
+            (si) => (
+              <PrintShiftTable
+                key={si}
+                shiftIndex={si}
+                employees={employees}
+                weekDates={weekDates}
+                weekStart={weekStart}
+                allData={allData}
+                weekAssignments={weekAssignments}
+              />
+            ),
+          )}
+        </div>
       )}
 
       {/* ── PRINT-ONLY header ── */}
@@ -1676,19 +2147,21 @@ export default function HomePage() {
           onClick={() => setShowPersonalModal(true)}
           style={{
             padding: "6px 14px",
-            border: "1px solid #86EFAC",
-            background: "linear-gradient(135deg,#ECFDF5 0%,#D1FAE5 100%)",
+            border: `1px solid ${isPersonalMode ? "#BFDBFE" : "#86EFAC"}`,
+            background: isPersonalMode
+              ? "linear-gradient(135deg,#EFF6FF 0%,#DBEAFE 100%)"
+              : "linear-gradient(135deg,#ECFDF5 0%,#D1FAE5 100%)",
             borderRadius: 8,
             cursor: "pointer",
             fontSize: 13,
-            color: "#065F46",
+            color: isPersonalMode ? "#1D4ED8" : "#065F46",
             fontWeight: 500,
             display: "flex",
             alignItems: "center",
             gap: 5,
           }}
         >
-          + Thêm dữ liệu cá nhân
+          {isPersonalMode ? "✎ Sửa dữ liệu cá nhân" : "+ Thêm dữ liệu cá nhân"}
         </button>
       </div>
 
@@ -1973,7 +2446,7 @@ export default function HomePage() {
       )}
 
       {/* Grid */}
-      <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+      <div className="no-print" style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
         <div
           style={{
             minWidth: 640,
@@ -2292,6 +2765,74 @@ export default function HomePage() {
         @media (max-width: 768px) {
           .print-btn { display: none !important; }
         }
+                .print-only-tables { display: none; }
+
+        @media print {
+          .print-only-tables {
+            display: block;
+          }
+          .print-shift-table {
+            width: 100%;
+            table-layout: fixed;
+            border-collapse: collapse;
+            margin-bottom: 28px;
+            page-break-inside: avoid;
+          }
+          .print-shift-table th,
+          .print-shift-table td {
+            border: 1px solid #9CA3AF;
+            padding: 6px 10px;
+            font-size: 12px;
+            text-align: center;
+            vertical-align: middle;
+            box-sizing: border-box;
+          }
+          .print-shift-table col.print-col-label { width: 60px; }
+          .print-shift-table col.print-col-emp { width: 110px; }
+          .print-shift-label {
+            font-weight: 700;
+            font-size: 10px;
+            letter-spacing: 0.03em;
+            text-align: center !important;
+            vertical-align: middle !important;
+          }
+          .print-header-cell {
+            background: #FCD34D !important;
+            color: #78350F;
+            font-weight: 700;
+          }
+          .print-emp-cell {
+            background: #FBD7D7 !important;
+            color: #7F1D1D;
+            font-weight: 600;
+            text-align: left;
+          }
+          .print-data-cell {
+            background: #FFFDF7 !important;
+            color: #111827;
+            text-align: center !important;
+            vertical-align: middle !important;
+          }
+          .print-assigned {
+            background: #BBF7D0 !important;
+            color: #065F46;
+            font-weight: 700;
+            text-align: center !important;
+            vertical-align: middle !important;
+          }
+          .print-sunday {
+            background: #EA580C !important;
+            color: #fff !important;
+            font-weight: 700;
+            text-align: center !important;
+            vertical-align: middle !important;
+          }
+          .print-sunday.print-assigned {
+            background: #16A34A !important;
+            color: #fff !important;
+            text-align: center !important;
+            vertical-align: middle !important;
+          }
 
         @media print {
           /* Ẩn tất cả nút và các phần không cần thiết */
