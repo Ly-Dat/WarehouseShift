@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import html2canvas from "html2canvas";
 
 const SHEET_URL = import.meta.env.VITE_SHEET_URL;
 const SCRIPT_URL = import.meta.env.VITE_SCRIPT_URL;
@@ -959,13 +960,27 @@ function AutoSelectModal({
     </div>
   );
 }
-function PrintChoiceModal({ onClose, onSelect }) {
+function PrintChoiceModal({
+  onClose,
+  onPrint,
+  onCopy,
+  employees,
+  weekDates,
+  weekStart,
+  allData,
+  weekAssignments,
+}) {
+  const [selected, setSelected] = useState(null); // null | "all" | "Sáng" | "Chiều" | "Tối"
   const options = [
     { key: "all", label: "Tất cả các ca" },
     { key: "Sáng", label: "Ca Sáng" },
     { key: "Chiều", label: "Ca Chiều" },
     { key: "Tối", label: "Ca Tối" },
   ];
+
+  const shiftIndexes =
+    selected === "all" ? [0, 1, 2] : selected ? [SHIFTS.indexOf(selected)] : [];
+
   return (
     <div
       style={{
@@ -988,60 +1003,173 @@ function PrintChoiceModal({ onClose, onSelect }) {
           borderRadius: 16,
           boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
           width: "100%",
-          maxWidth: 340,
+          maxWidth: selected ? 920 : 340,
           margin: "1rem",
           overflow: "hidden",
           fontFamily: "system-ui, sans-serif",
+          maxHeight: "90vh",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
-        <div style={{ padding: "18px 22px", borderBottom: "1px solid #F3F4F6" }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: "#111827" }}>
-            Xuất PDF
+        <div
+          style={{
+            padding: "18px 22px",
+            borderBottom: "1px solid #F3F4F6",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "#111827" }}>
+              Xuất PDF
+            </div>
+            <div style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>
+              {selected ? "Xem trước" : "Chọn ca muốn xuất"}
+            </div>
           </div>
-          <div style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>
-            Chọn ca muốn xuất
-          </div>
-        </div>
-        <div style={{ padding: "14px 22px", display: "flex", flexDirection: "column", gap: 8 }}>
-          {options.map((opt) => (
-            <button
-              key={opt.key}
-              onClick={() => onSelect(opt.key)}
-              style={{
-                padding: "10px 14px",
-                border: "1px solid #D1D5DB",
-                background: "#fff",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontSize: 13,
-                color: "#374151",
-                textAlign: "left",
-              }}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-        <div style={{ padding: "0 22px 18px", display: "flex", justifyContent: "flex-end" }}>
           <button
             onClick={onClose}
             style={{
-              padding: "7px 16px",
-              border: "1px solid #D1D5DB",
-              background: "#fff",
+              width: 30,
+              height: 30,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "#F3F4F6",
+              border: "none",
               borderRadius: 8,
               cursor: "pointer",
-              fontSize: 13,
-              color: "#374151",
+              fontSize: 18,
+              color: "#6B7280",
+              lineHeight: 1,
             }}
           >
-            Huỷ
+            ×
           </button>
         </div>
+
+        {!selected && (
+          <>
+            <div style={{ padding: "14px 22px", display: "flex", flexDirection: "column", gap: 8 }}>
+              {options.map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => setSelected(opt.key)}
+                  style={{
+                    padding: "10px 14px",
+                    border: "1px solid #D1D5DB",
+                    background: "#fff",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 13,
+                    color: "#374151",
+                    textAlign: "left",
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ padding: "0 22px 18px", display: "flex", justifyContent: "flex-end" }}>
+              <button
+                onClick={onClose}
+                style={{
+                  padding: "7px 16px",
+                  border: "1px solid #D1D5DB",
+                  background: "#fff",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  color: "#374151",
+                }}
+              >
+                Huỷ
+              </button>
+            </div>
+          </>
+        )}
+
+        {selected && (
+          <>
+            <div style={{ padding: "16px 22px", overflow: "auto", flex: 1 }}>
+              {shiftIndexes.map((si) => (
+                <PrintShiftTable
+                  key={si}
+                  shiftIndex={si}
+                  employees={employees}
+                  weekDates={weekDates}
+                  weekStart={weekStart}
+                  allData={allData}
+                  weekAssignments={weekAssignments}
+                />
+              ))}
+            </div>
+            <div
+              style={{
+                padding: "14px 22px 18px",
+                borderTop: "1px solid #F3F4F6",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <button
+                onClick={() => setSelected(null)}
+                style={{
+                  padding: "8px 16px",
+                  border: "1px solid #D1D5DB",
+                  background: "#fff",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  color: "#374151",
+                }}
+              >
+                ← Quay lại
+              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => onCopy(selected)}
+                  style={{
+                    padding: "8px 16px",
+                    border: "1px solid #BFDBFE",
+                    background: "#EFF6FF",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 13,
+                    color: "#2563EB",
+                    fontWeight: 500,
+                  }}
+                >
+                  📋 Copy ảnh
+                </button>
+                <button
+                  onClick={() => onPrint(selected)}
+                  style={{
+                    padding: "8px 20px",
+                    border: "1px solid #059669",
+                    background: "#D1FAE5",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 13,
+                    color: "#065F46",
+                    fontWeight: 600,
+                  }}
+                >
+                  🖨️ In
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
+
 function PrintShiftTable({ shiftIndex, employees, weekDates, weekStart, allData, weekAssignments }) {
   const shift = SHIFTS[shiftIndex];
   const printColor = PRINT_SHIFT_COLORS[shiftIndex];
@@ -1051,7 +1179,7 @@ function PrintShiftTable({ shiftIndex, employees, weekDates, weekStart, allData,
         <col className="print-col-label" />
         <col className="print-col-emp" />
         {weekDates.map((_, i) => (
-          <col key={i} />
+          <col key={i} className="print-col-day" />
         ))}
       </colgroup>
       <thead>
@@ -1089,13 +1217,10 @@ function PrintShiftTable({ shiftIndex, employees, weekDates, weekStart, allData,
       <tbody>
         {employees.map((emp, ei) => (
           <tr key={emp}>
-            {ei === 0 && (
-              <td
-                rowSpan={employees.length}
-                className="print-shift-label"
-                style={{ background: printColor.bg }}
-              />
-            )}
+            <td
+              className="print-shift-label print-shift-label-cell"
+              style={{ background: printColor.bg }}
+            />
             <td className="print-emp-cell">{emp}</td>
             {weekDates.map((_, di) => {
               const avail = getAvailability(allData, emp, di, weekStart);
@@ -1649,6 +1774,9 @@ export default function HomePage() {
   const [personalRawData, setPersonalRawData] = useState(null);
   const [showPrintChoice, setShowPrintChoice] = useState(false);
   const [printFilter, setPrintFilter] = useState(null); // null | "all" | "Sáng" | "Chiều" | "Tối"
+  const [copyFilter, setCopyFilter] = useState(null); // null | "all" | "Sáng" | "Chiều" | "Tối"
+  const [copyImageStatus, setCopyImageStatus] = useState("idle"); // idle | working | done | error
+  const captureRef = useRef(null);
 
   useEffect(() => {
     if (!printFilter) return;
@@ -1664,6 +1792,82 @@ export default function HomePage() {
       window.removeEventListener("afterprint", reset);
     };
   }, [printFilter]);
+
+    useEffect(() => {
+    if (!copyFilter) return;
+    let cancelled = false;
+    async function run() {
+      setCopyImageStatus("working");
+      try {
+        const node = captureRef.current;
+        if (!node) throw new Error("Không tìm thấy bảng để chụp");
+
+        const blobPromise = new Promise((r) => setTimeout(r, 80))
+          .then(() => html2canvas(node, { backgroundColor: "#ffffff", scale: 2 }))
+          .then(
+            (canvas) =>
+              new Promise((resolve, reject) => {
+                canvas.toBlob(
+                  (b) => (b ? resolve(b) : reject(new Error("Không tạo được ảnh"))),
+                  "image/png",
+                );
+              }),
+          );
+
+        if (navigator.clipboard && window.ClipboardItem) {
+          // Truyền Promise trực tiếp (không await trước) — Safari giữ được
+          // quyền ghi clipboard gắn với cú chạm gốc dù blob resolve trễ.
+          await navigator.clipboard.write([
+            new ClipboardItem({ "image/png": blobPromise }),
+          ]);
+        } else {
+          const blob = await blobPromise;
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "lich-xep-ca.png";
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+        if (!cancelled) setCopyImageStatus("done");
+      } catch (e) {
+        // Fallback: nếu ghi clipboard thất bại (quyền bị từ chối, trình duyệt
+        // không hỗ trợ đủ...), tự động tải ảnh xuống thay vì chỉ báo lỗi suông.
+        try {
+          const node = captureRef.current;
+          if (node) {
+            const canvas = await html2canvas(node, {
+              backgroundColor: "#ffffff",
+              scale: 2,
+            });
+            const blob = await new Promise((resolve) =>
+              canvas.toBlob(resolve, "image/png"),
+            );
+            if (blob) {
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = "lich-xep-ca.png";
+              a.click();
+              URL.revokeObjectURL(url);
+            }
+          }
+        } catch {}
+        if (!cancelled) setCopyImageStatus("error");
+      } finally {
+        setTimeout(() => {
+          if (!cancelled) {
+            setCopyFilter(null);
+            setCopyImageStatus("idle");
+          }
+        }, 2200);
+      }
+    }
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [copyFilter]);
 
   useEffect(() => {
     async function fetchSheet() {
@@ -1905,9 +2109,14 @@ export default function HomePage() {
     setShowPrintChoice(true);
   }
 
-  function handlePrintSelect(choice) {
+  function handlePrintFromModal(choice) {
     setShowPrintChoice(false);
     setPrintFilter(choice);
+  }
+
+  function handleCopyFromModal(choice) {
+    setShowPrintChoice(false);
+    setCopyFilter(choice);
   }
 
   const [copyStatus, setCopyStatus] = useState("idle");
@@ -2040,7 +2249,13 @@ export default function HomePage() {
       {showPrintChoice && (
         <PrintChoiceModal
           onClose={() => setShowPrintChoice(false)}
-          onSelect={handlePrintSelect}
+          onPrint={handlePrintFromModal}
+          onCopy={handleCopyFromModal}
+          employees={employees}
+          weekDates={weekDates}
+          weekStart={weekStart}
+          allData={allData}
+          weekAssignments={weekAssignments}
         />
       )}
 
@@ -2059,6 +2274,59 @@ export default function HomePage() {
               />
             ),
           )}
+        </div>
+      )}
+
+      {copyFilter && (
+        <div
+          ref={captureRef}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: "-10000px",
+            background: "#fff",
+            padding: 16,
+            width: 902, // 870 (bảng) + 16*2 (padding)
+          }}
+        >
+          {(copyFilter === "all" ? [0, 1, 2] : [SHIFTS.indexOf(copyFilter)]).map(
+            (si) => (
+              <PrintShiftTable
+                key={si}
+                shiftIndex={si}
+                employees={employees}
+                weekDates={weekDates}
+                weekStart={weekStart}
+                allData={allData}
+                weekAssignments={weekAssignments}
+              />
+            ),
+          )}
+        </div>
+      )}
+
+      {copyImageStatus !== "idle" && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 20,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 2000,
+            padding: "10px 18px",
+            borderRadius: 10,
+            fontSize: 13,
+            fontWeight: 500,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+            background:
+              copyImageStatus === "error" ? "#FEF2F2" : "#D1FAE5",
+            color: copyImageStatus === "error" ? "#B91C1C" : "#065F46",
+          }}
+        >
+          {copyImageStatus === "working" && "Đang tạo ảnh..."}
+          {copyImageStatus === "done" &&
+            "✓ Đã copy ảnh — dán vào Zalo bằng Ctrl+V"}
+          {copyImageStatus === "error" && "✗ Copy ảnh thất bại, thử lại"}
         </div>
       )}
 
@@ -2758,83 +3026,89 @@ export default function HomePage() {
         </div>
       </div>
 
-      <style>{`
+            <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
 
         /* Ẩn nút xuất PDF trên mobile */
-        @media (max-width: 768px) {
-          .print-btn { display: none !important; }
+        // @media (max-width: 768px) {
+        //   .print-btn { display: none !important; }
+        // }
+
+        .print-only-tables { display: none; }
+
+        /* Style bảng in — luôn hoạt động (dùng chung cho in giấy lẫn chụp ảnh copy) */
+        .print-shift-table {
+          table-layout: fixed;
+          border-collapse: collapse;
+          margin-bottom: 28px;
         }
-                .print-only-tables { display: none; }
+        .print-shift-table th,
+        .print-shift-table td {
+          border: 1px solid #9CA3AF;
+          padding: 6px 10px;
+          font-size: 12px;
+          text-align: center;
+          vertical-align: middle;
+          box-sizing: border-box;
+        }
+        .print-shift-table col.print-col-label { width: 60px; }
+        .print-shift-table col.print-col-emp { width: 110px; }
+        .print-shift-table col.print-col-day { width: 100px; }
+        .print-shift-label {
+          font-weight: 700;
+          font-size: 10px;
+          letter-spacing: 0.03em;
+          text-align: center !important;
+          vertical-align: middle !important;
+        }
+        .print-shift-label-cell {
+          border-top: none !important;
+          border-bottom: none !important;
+        }
+        .print-shift-table tbody tr:first-child .print-shift-label-cell {
+          border-top: 1px solid #9CA3AF !important;
+        }
+        .print-shift-table tbody tr:last-child .print-shift-label-cell {
+          border-bottom: 1px solid #9CA3AF !important;
+        }
+        .print-header-cell {
+          background: #FCD34D !important;
+          color: #78350F;
+          font-weight: 700;
+        }
+        .print-emp-cell {
+          background: #FBD7D7 !important;
+          color: #7F1D1D;
+          font-weight: 600;
+          text-align: left;
+        }
+        .print-data-cell {
+          background: #FFFDF7 !important;
+          color: #111827;
+          text-align: center !important;
+          vertical-align: middle !important;
+        }
+        .print-assigned {
+          background: #BBF7D0 !important;
+          color: #065F46 !important;
+          font-weight: 700;
+          text-align: center !important;
+          vertical-align: middle !important;
+        }
+        .print-sunday {
+          background: #EA580C !important;
+          color: #fff !important;
+          font-weight: 700;
+          text-align: center !important;
+          vertical-align: middle !important;
+        }
 
         @media print {
           .print-only-tables {
             display: block;
           }
-          .print-shift-table {
-            width: 100%;
-            table-layout: fixed;
-            border-collapse: collapse;
-            margin-bottom: 28px;
-            page-break-inside: avoid;
-          }
-          .print-shift-table th,
-          .print-shift-table td {
-            border: 1px solid #9CA3AF;
-            padding: 6px 10px;
-            font-size: 12px;
-            text-align: center;
-            vertical-align: middle;
-            box-sizing: border-box;
-          }
-          .print-shift-table col.print-col-label { width: 60px; }
-          .print-shift-table col.print-col-emp { width: 110px; }
-          .print-shift-label {
-            font-weight: 700;
-            font-size: 10px;
-            letter-spacing: 0.03em;
-            text-align: center !important;
-            vertical-align: middle !important;
-          }
-          .print-header-cell {
-            background: #FCD34D !important;
-            color: #78350F;
-            font-weight: 700;
-          }
-          .print-emp-cell {
-            background: #FBD7D7 !important;
-            color: #7F1D1D;
-            font-weight: 600;
-            text-align: left;
-          }
-          .print-data-cell {
-            background: #FFFDF7 !important;
-            color: #111827;
-            text-align: center !important;
-            vertical-align: middle !important;
-          }
-          .print-assigned {
-            background: #BBF7D0 !important;
-            color: #065F46;
-            font-weight: 700;
-            text-align: center !important;
-            vertical-align: middle !important;
-          }
-          .print-sunday {
-            background: #EA580C !important;
-            color: #fff !important;
-            font-weight: 700;
-            text-align: center !important;
-            vertical-align: middle !important;
-          }
-          .print-sunday.print-assigned {
-            background: #16A34A !important;
-            color: #fff !important;
-            text-align: center !important;
-            vertical-align: middle !important;
-          }
+          .print-shift-table { page-break-inside: avoid; }
 
-        @media print {
           /* Ẩn tất cả nút và các phần không cần thiết */
           .no-print { display: none !important; }
 
