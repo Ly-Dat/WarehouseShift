@@ -214,7 +214,10 @@ function autoSelectOptimal({
   allAssignmentsHistory,
   fulltimeNames = [],
 }) {
-  const fulltimeSet = new Set(fulltimeNames);
+  const fulltimeSet = new Set(
+    fulltimeNames.map((n) => n.trim().toLowerCase()),
+  );
+  const isFulltime = (emp) => fulltimeSet.has(emp.trim().toLowerCase());
   const historicalCount = {};
   for (const emp of employees) historicalCount[emp] = 0;
   for (const a of allAssignmentsHistory) {
@@ -225,7 +228,7 @@ function autoSelectOptimal({
   const result = { ...currentAssignments };
   
   for (const emp of employees) {
-    if (!fulltimeSet.has(emp)) continue;
+    if (!isFulltime(emp)) continue;
     for (const shift of SHIFTS) {
       for (let di = 0; di < 7; di++) {
         const avail = getAvailability(allData, emp, di, weekStart);
@@ -252,7 +255,7 @@ function autoSelectOptimal({
         (emp) => result[`${emp}|${shift}|${di}`],
       );
       const unassigned = available.filter(
-        (emp) => !result[`${emp}|${shift}|${di}`] && !fulltimeSet.has(emp),
+        (emp) => !result[`${emp}|${shift}|${di}`] && !isFulltime(emp),
       );
       const currentCount = assigned.length;
       if (currentCount < target) {
@@ -266,7 +269,7 @@ function autoSelectOptimal({
           result[`${sorted[i]}|${shift}|${di}`] = true;
         }
       } else if (currentCount > target) {
-        const cuttable = assigned.filter((emp) => !fulltimeSet.has(emp));
+        const cuttable = assigned.filter((emp) => !isFulltime(emp));
         const sorted = [...cuttable].sort((a, b) => {
           const wDiff = weekCount(b) - weekCount(a);
           if (wDiff !== 0) return wDiff;
